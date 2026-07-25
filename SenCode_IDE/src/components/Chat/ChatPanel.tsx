@@ -19,7 +19,7 @@ import { composeSystemPrompt } from '../../lib/systemPrompt';
 
 // ── Permission dialog type ────────────────────────────────────────────────────
 interface PendingPermission {
-  action: 'EDIT' | 'CREATE';
+  action: 'EDIT' | 'CREATE' | 'DELETE';
   files: { path: string; content: string }[];
   onProceed: () => void;
   onDeny: () => void;
@@ -43,6 +43,7 @@ interface ChatPanelProps {
   onOpenInProgramming?: (content: string, language: string, filename?: string) => void;
   onRunCommand?: (cmd: string) => void;
   onFilesWritten?: (files: { path: string; content: string }[]) => void;
+  onFilesDeleted?: (paths: string[]) => void;
   onClearChat: () => void;
 }
 
@@ -92,6 +93,7 @@ export function ChatPanel({
   onOpenInProgramming,
   onRunCommand,
   onFilesWritten,
+  onFilesDeleted,
   onClearChat,
 }: ChatPanelProps) {
   const [input, setInput] = useState('');
@@ -104,8 +106,12 @@ export function ChatPanel({
   const [sessionId] = useState(() => Math.random().toString(36).slice(2, 10));
   const [sessionPinned, setSessionPinned] = useState(false);
 
-  // ── Permission dialog state ───────────────────────────────────────────────
-  const [pendingPermission, setPendingPermission] = useState<PendingPermission | null>(null);
+  // ── Permission dialog queue ────────────────────────────────────────────────
+  // A single `pendingPermission` slot would let a second concurrent request silently
+  // overwrite (and strand) the first one. Using a queue guarantees each request is
+  // shown one at a time, in order, and none of them get dropped.
+  const [permissionQueue, setPermissionQueue] = useState<PendingPermission[]>([]);
+  const activePermission = permissionQueue[0] ?? null;
 
   const sessionCreatedAt = useRef(Date.now());
   const abortRef = useRef<AbortController | null>(null);
@@ -168,13 +174,25 @@ export function ChatPanel({
   }, [isStreaming, messages.length]);
 
   // ── Permission request handler ────────────────────────────────────────────
+  // Appends to the queue rather than replacing state, so simultaneous requests
+  // (e.g. multiple write-files/delete-files blocks) each get their own turn
+  // instead of clobbering one another.
   const handleRequestPermission = useCallback((
-    action: 'EDIT' | 'CREATE',
+    action: 'EDIT' | 'CREATE' | 'DELETE',
     files: { path: string; content: string }[],
     onProceed: () => void,
     onDeny: () => void,
   ) => {
-    setPendingPermission({ action, files, onProceed, onDeny });
+    setPermissionQueue((prev) => [...prev, { action, files, onProceed, onDeny }]);
+  }, []);
+
+  // Resolve the currently-shown request, then advance to the next one in line
+  const resolveActivePermission = useCallback((decision: 'proceed' | 'deny') => {
+    setPermissionQueue((prev) => {
+      const [current, ...rest] = prev;
+      if (current) decision === 'proceed' ? current.onProceed() : current.onDeny();
+      return rest;
+    });
   }, []);
 
   // Derive the last user message to pass down as intent context
@@ -518,6 +536,7 @@ export function ChatPanel({
                 onAddToProject={mode === 'programming' ? onAddToProject : undefined}
                 onOpenInProgramming={mode === 'chat' ? onOpenInProgramming : undefined}
                 onFilesWritten={onFilesWritten}
+                onFilesDeleted={onFilesDeleted}
                 fileTree={fileTree}
                 lastUserPrompt={lastUserPrompt}
                 onRequestPermission={handleRequestPermission}
@@ -589,7 +608,7 @@ export function ChatPanel({
         <div className="relative">
 
           {/* ── Permission dialog — floats above the input box ───────────── */}
-          {pendingPermission && (
+          {activePermission && (
             <div
               style={{
                 position: 'absolute',
@@ -612,13 +631,13 @@ export function ChatPanel({
             >
               <span style={{ color: 'var(--ink-mid)', flex: 1 }}>
                 User response is needed for this action
+                {permissionQueue.length > 1 && (
+                  <span style={{ color: 'var(--ink-low)' }}> · {permissionQueue.length - 1} more waiting</span>
+                )}
               </span>
               <div style={{ display: 'flex', gap: '6px', flexShrink: 0 }}>
                 <button
-                  onClick={() => {
-                    pendingPermission.onDeny();
-                    setPendingPermission(null);
-                  }}
+                  onClick={() => resolveActivePermission('deny')}
                   style={{
                     padding: '4px 12px',
                     borderRadius: '6px',
@@ -632,10 +651,7 @@ export function ChatPanel({
                   Deny
                 </button>
                 <button
-                  onClick={() => {
-                    pendingPermission.onProceed();
-                    setPendingPermission(null);
-                  }}
+                  onClick={() => resolveActivePermission('proceed')}
                   style={{
                     padding: '4px 12px',
                     borderRadius: '6px',
