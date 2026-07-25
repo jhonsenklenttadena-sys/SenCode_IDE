@@ -2,15 +2,17 @@
  * MessageBubble — renders a single chat message (user or assistant).
  *
  * Design: Combined Option A + C + B.
- * - write-files blocks are auto-executed when the message finishes streaming.
+ * - write-files blocks use a sequential permission pipeline:
+ *   1. Ask folder creation permission → halt until confirmed → create folders
+ *   2. Ask file creation permission  → halt until confirmed → write files
  */
 
 import { Loader2, AlertTriangle, ChevronRight, Info, ExternalLink, CheckCircle2, FolderOutput, Undo2 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import type { ChatMessage, FileNode } from '../../lib/types';
 import { parseBlocks, renderMarkdown } from '../../lib/markdown';
 import { CodeBlock } from './CodeBlock';
-import { writeFiles, undoWriteFiles, isElectron } from '../../lib/electronBridge';
+import { writeFiles, undoWriteFiles, isElectron, createDirs, deleteFile } from '../../lib/electronBridge';
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -18,16 +20,68 @@ interface MessageBubbleProps {
   onApplyDiff?: (content: string, language: string) => void;
   onAddToProject?: (content: string, language: string) => void;
   onOpenInProgramming?: (content: string, language: string, filename?: string) => void;
+  /** Called after AI writes files — so App can open them in tabs and refresh tree */
   onFilesWritten?: (files: { path: string; content: string }[]) => void;
+  /** Called after AI deletes files — so App can close their tabs and refresh tree */
+  onFilesDeleted?: (paths: string[]) => void;
+  /** Current project file tree — used to tell EDIT (file already exists) apart from CREATE (new file) */
   fileTree?: FileNode[];
+  /** The user's most recent message — used to judge whether an action was explicitly requested */
   lastUserPrompt?: string;
+  /** Forwarded to WriteFilesBlock/DeleteFilesBlock — delegates the Deny/Proceed dialog to ChatPanel */
   onRequestPermission?: (
-    action: 'EDIT' | 'CREATE',
+    action: 'EDIT' | 'CREATE' | 'DELETE',
     files: { path: string; content: string }[],
     onProceed: () => void,
     onDeny: () => void,
   ) => void;
 }
+
+// ── Permission heuristics ────────────────────────────────────────────────────────
+/** Walks the file tree to check whether a path already exists (→ this write is an EDIT, not a CREATE) */
+function fileExistsInTree(path: string, nodes: FileNode[]): boolean {
+  for (const n of nodes) {
+    if (n.type === 'file' && n.path === path) return true;
+    if (n.children && fileExistsInTree(path, n.children)) return true;
+  }
+  return false;
+}
+
+/**
+ * EDIT only needs confirmation when it looks like an inferred, large-scale refactor —
+ * i.e. more than a couple files, or the user's prompt didn't clearly ask to change these files.
+ */
+function needsPermissionForEdit(filePaths: string[], prompt: string): boolean {
+  const p = prompt.toLowerCase();
+  const hasEditIntent = /\b(change|fix|update|edit|modify|refactor|replace|rewrite|correct|adjust|tweak)\b/.test(p);
+  const allMentioned = filePaths.every(fp => {
+    const name = (fp.split(/[\\/]/).pop() ?? fp).toLowerCase();
+    return p.includes(name);
+  });
+  if (filePaths.length > 2) return true; // multi-file = big refactor, always ask
+  return !(hasEditIntent && allMentioned);
+}
+
+/**
+ * CREATE only needs confirmation when the user didn't clearly ask for a new file/folder —
+ * i.e. more than one new file at once, or the prompt didn't name what's being created.
+ */
+function needsPermissionForCreate(filePaths: string[], prompt: string): boolean {
+  const p = prompt.toLowerCase();
+  const hasCreateIntent = /\b(create|make|add|new|generate|write|build)\b/.test(p);
+  const allMentioned = filePaths.every(fp => {
+    const name = (fp.split(/[\\/]/).pop() ?? fp).toLowerCase();
+    return p.includes(name);
+  });
+  if (filePaths.length > 1) return true; // multiple new files = ask
+  return !(hasCreateIntent && allMentioned);
+}
+
+/** DELETE always requires confirmation — no heuristic bypass, deletions are irreversible. */
+function needsPermissionForDelete(_filePaths: string[], _prompt: string): boolean {
+  return true;
+}
+
 // ── Follow-up extraction ───────────────────────────────────────────────────────
 function extractFollowUp(content: string): { body: string; followUp: string | null } {
   if (!content.trim()) return { body: content, followUp: null };
@@ -57,84 +111,110 @@ function FollowUpIcon({ text }: { text: string }) {
   return <ChevronRight size={12} style={{ color: 'var(--followup-text)', opacity: 0.7, flexShrink: 0 }} />;
 }
 
-// ── Permission helpers ─────────────────────────────────────────────────────────
-function fileExistsInTree(path: string, nodes: FileNode[]): boolean {
-  for (const n of nodes) {
-    if (n.type === 'file' && n.path === path) return true;
-    if (n.children && fileExistsInTree(path, n.children)) return true;
-  }
-  return false;
-}
-
-function needsPermissionForEdit(filePaths: string[], prompt: string): boolean {
-  const p = prompt.toLowerCase();
-  const hasEditIntent = /\b(change|fix|update|edit|modify|refactor|replace|rewrite|correct|adjust|tweak)\b/.test(p);
-  const allMentioned = filePaths.every(fp => {
-    const name = (fp.split(/[\\/]/).pop() ?? fp).toLowerCase();
-    return p.includes(name);
-  });
-  if (filePaths.length > 2) return true; // multi-file = big refactor, always ask
-  return !(hasEditIntent && allMentioned);
-}
-
-function needsPermissionForCreate(filePaths: string[], prompt: string): boolean {
-  const p = prompt.toLowerCase();
-  const hasCreateIntent = /\b(create|make|add|new|generate|write|build)\b/.test(p);
-  const allMentioned = filePaths.every(fp => {
-    const name = (fp.split(/[\\/]/).pop() ?? fp).toLowerCase();
-    return p.includes(name);
-  });
-  if (filePaths.length > 1) return true; // multiple new files = ask
-  return !(hasCreateIntent && allMentioned);
-}
+// ── Write-files block ──────────────────────────────────────────────────────────
+type WriteStatus =
+  | 'awaiting-folder-permission'
+  | 'creating-folders'
+  | 'awaiting-file-permission'
+  | 'writing-files'
+  | 'done'
+  | 'error'
+  | 'undoing'
+  | 'undone'
+  | 'denied';
 
 function WriteFilesBlock({
   files,
   onFilesWritten,
+  onRequestPermission,
   fileTree,
   lastUserPrompt,
-  onRequestPermission,
 }: {
   files: { path: string; content: string }[];
   onFilesWritten?: (files: { path: string; content: string }[]) => void;
-  fileTree?: FileNode[];
-  lastUserPrompt?: string;
+  /** Delegates the actual Deny/Proceed prompt up to ChatPanel, which renders it above the input box */
   onRequestPermission?: (
-    action: 'EDIT' | 'CREATE',
+    action: 'EDIT' | 'CREATE' | 'DELETE',
     files: { path: string; content: string }[],
     onProceed: () => void,
     onDeny: () => void,
   ) => void;
+  fileTree?: FileNode[];
+  lastUserPrompt?: string;
 }) {
-  const [status, setStatus] = useState<'idle' | 'writing' | 'done' | 'error' | 'undoing' | 'undone' | 'denied'>('idle');
+  const [status, setStatus] = useState<WriteStatus>('awaiting-folder-permission');
   const [results, setResults] = useState<{ path: string; ok: boolean; error?: string }[]>([]);
 
+  const tree = fileTree ?? [];
+  const prompt = lastUserPrompt ?? '';
+
+  // Split files into ones that already exist (EDIT) vs brand-new ones (CREATE)
+  const editFiles = useMemo(() => files.filter(f => fileExistsInTree(f.path, tree)), [files, tree]);
+  const createFiles = useMemo(() => files.filter(f => !fileExistsInTree(f.path, tree)), [files, tree]);
+
+  // Only new files can require new parent directories
+  const uniqueDirs = useMemo(() => {
+    const dirs = new Set<string>();
+    for (const f of createFiles) {
+      const normalized = f.path.replace(/\\/g, '/');
+      const lastSlash = normalized.lastIndexOf('/');
+      if (lastSlash > 0) dirs.add(normalized.slice(0, lastSlash));
+    }
+    return Array.from(dirs);
+  }, [createFiles]);
+
+  const editNeeds = editFiles.length > 0 && needsPermissionForEdit(editFiles.map(f => f.path), prompt);
+  const createNeeds = createFiles.length > 0 && needsPermissionForCreate(createFiles.map(f => f.path), prompt);
+
+  // ── Step 1: folder creation (only relevant when new files land in new folders) ──
+  const handleFolderApprove = async () => {
+    setStatus('creating-folders');
+    await createDirs(uniqueDirs);           // execute folder creation
+    askFilePermission();                    // halt — wait for next approval
+  };
+
+  // ── Step 2: writing/editing the files themselves ─────────────────────────────
+  const handleFileApprove = async () => {
+    setStatus('writing-files');
+    const res = await writeFiles(files);    // execute file creation/edit
+    setResults(res);
+    const allOk = res.every(r => r.ok);
+    setStatus(allOk ? 'done' : 'error');
+    if (allOk) onFilesWritten?.(files);
+  };
+
+  const handleDeny = () => setStatus('denied');
+
+  // Ask ChatPanel to show its Deny/Proceed dialog for the write step, skipping it
+  // entirely when the edit/create was clearly expected from the user's own prompt.
+  const askFilePermission = () => {
+    if ((editNeeds || createNeeds) && onRequestPermission) {
+      setStatus('awaiting-file-permission');
+      const action: 'EDIT' | 'CREATE' = editNeeds ? 'EDIT' : 'CREATE';
+      onRequestPermission(action, files, handleFileApprove, handleDeny);
+    } else {
+      handleFileApprove(); // expected action, or no dialog wired up — proceed directly
+    }
+  };
+
+  // Ask ChatPanel to show its Deny/Proceed dialog for the folder step, skipping it
+  // when the new file(s)/folder were clearly asked for.
+  const askFolderPermission = () => {
+    if (createNeeds && onRequestPermission) {
+      setStatus('awaiting-folder-permission');
+      onRequestPermission('CREATE', files, handleFolderApprove, handleDeny);
+    } else {
+      handleFolderApprove(); // expected creation — skip the folder prompt
+    }
+  };
+
+  // On mount — route straight past whichever step doesn't apply
   useEffect(() => {
     if (!isElectron() || files.length === 0) return;
-
-    const doWrite = () => {
-      setStatus('writing');
-      writeFiles(files).then((res) => {
-        setResults(res);
-        const allOk = res.every(r => r.ok);
-        setStatus(allOk ? 'done' : 'error');
-        if (allOk) onFilesWritten?.(files);
-      });
-    };
-
-    const tree = fileTree ?? [];
-    const prompt = lastUserPrompt ?? '';
-    const editFiles = files.filter(f => fileExistsInTree(f.path, tree));
-    const createFiles = files.filter(f => !fileExistsInTree(f.path, tree));
-
-    const editNeeds = editFiles.length > 0 && needsPermissionForEdit(editFiles.map(f => f.path), prompt);
-    const createNeeds = createFiles.length > 0 && needsPermissionForCreate(createFiles.map(f => f.path), prompt);
-
-    if ((editNeeds || createNeeds) && onRequestPermission) {
-      const action = editNeeds ? 'EDIT' : 'CREATE';
-      onRequestPermission(action, files, doWrite, () => setStatus('denied'));
+    if (uniqueDirs.length > 0) {
+      askFolderPermission();
     } else {
-      doWrite();
+      askFilePermission();
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -143,55 +223,93 @@ function WriteFilesBlock({
     const paths = files.map(f => f.path);
     await undoWriteFiles(paths);
     setStatus('undone');
+    // Notify parent that files were undone so it can close those tabs
     onFilesWritten?.([]);
   };
 
-  const isDone = status === 'done';
+  if (!isElectron()) return null;
+
+  const isDone   = status === 'done';
   const isUndone = status === 'undone';
+  const isBusy   = status === 'creating-folders' || status === 'writing-files' || status === 'undoing';
 
   return (
-    <div style={{ border: '1px solid var(--s4)', borderRadius: '8px', overflow: 'hidden', marginBottom: '8px' }}>
+    <div className="rounded-lg my-2 overflow-hidden text-[12px]"
+      style={{ border: '1px solid var(--s3)', background: 'var(--s2)' }}>
+
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 12px', background: 'var(--surface-2)', borderBottom: '1px solid var(--s4)' }}>
-        <FolderOutput size={14} style={{ color: 'var(--primary-400)', flexShrink: 0 }} />
-        <span style={{ fontSize: '12px', fontWeight: 500, color: 'var(--ink-high)', flex: 1 }}>
-          {status === 'idle'    ? 'Waiting for permission…'
-          : status === 'writing' ? 'Writing files…'
-          : status === 'done'    ? 'Files saved'
-          : status === 'error'   ? 'Some files failed'
-          : status === 'denied'  ? 'Action cancelled'
-          : status === 'undoing' ? 'Undoing…'
-          : status === 'undone'  ? 'Changes undone'
+      <div className="flex items-center gap-2 px-3 py-2"
+        style={{ borderBottom: '1px solid var(--s3)', color: 'var(--ink-mid)' }}>
+        <FolderOutput size={13} style={{ color: 'var(--accent)', flexShrink: 0 }} />
+        <span className="font-medium" style={{ color: 'var(--ink-high)' }}>
+          {status === 'awaiting-folder-permission' ? 'Permission required: folder creation'
+          : status === 'creating-folders'          ? 'Creating folders…'
+          : status === 'awaiting-file-permission'   ? 'Permission required: file creation'
+          : status === 'writing-files'              ? 'Writing files…'
+          : status === 'done'                       ? 'Files saved'
+          : status === 'error'                      ? 'Some files failed'
+          : status === 'undoing'                    ? 'Undoing…'
+          : status === 'undone'                      ? 'Changes undone'
+          : status === 'denied'                      ? 'Cancelled'
           : 'Files to create'}
         </span>
-        {(status === 'writing' || status === 'undoing')
-          ? <Loader2 size={14} style={{ color: 'var(--primary-400)', animation: 'spin 1s linear infinite' }} />
+        {isBusy
+          ? <Loader2 size={11} className="animate-spin ml-auto" style={{ color: 'var(--accent)' }} />
           : isDone
-          ? <CheckCircle2 size={14} style={{ color: 'var(--success-500)' }} />
+          ? <CheckCircle2 size={13} className="ml-auto" style={{ color: 'var(--success)' }} />
           : null}
       </div>
 
-      {/* File list */}
-      <div style={{ padding: '6px 12px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        {files.map((f, i) => {
-          const result = results.find(r => r.path === f.path);
-          return (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px' }}>
-              <ChevronRight size={12} style={{ color: 'var(--ink-low)', flexShrink: 0 }} />
-              <span style={{ color: 'var(--ink-mid)', flex: 1, fontFamily: 'monospace' }}>{f.path}</span>
-              {result?.ok && !isUndone && <CheckCircle2 size={12} style={{ color: 'var(--success-500)' }} />}
-              {result?.ok === false && <span style={{ color: 'var(--error-400)', fontSize: '11px' }}>✗ {result.error}</span>}
-            </div>
-          );
-        })}
-      </div>
+      {/* STEP 1 — awaiting folder permission (dialog itself renders in ChatPanel, above the input) */}
+      {status === 'awaiting-folder-permission' && (
+        <div className="px-3 py-2" style={{ color: 'var(--ink-mid)' }}>
+          <p className="mb-2">Respond to the permission request above to create:</p>
+          <div className="space-y-1">
+            {uniqueDirs.map(d => (
+              <div key={d} className="font-mono truncate" style={{ color: 'var(--ink-high)' }}>{d}</div>
+            ))}
+          </div>
+        </div>
+      )}
 
-      {/* Undo button */}
+      {/* STEP 2 — awaiting file permission (dialog itself renders in ChatPanel, above the input) */}
+      {status === 'awaiting-file-permission' && (
+        <div className="px-3 py-2" style={{ color: 'var(--ink-mid)' }}>
+          <p className="mb-2">Respond to the permission request above to write:</p>
+          <div className="space-y-1">
+            {files.map(f => (
+              <div key={f.path} className="font-mono truncate" style={{ color: 'var(--ink-high)' }}>{f.path}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* File list — shown after writing completes */}
+      {(status === 'done' || status === 'error' || status === 'undone') && (
+        <div className="px-3 py-2 space-y-1">
+          {files.map((f) => {
+            const result = results.find(r => r.path === f.path);
+            return (
+              <div key={f.path} className="flex items-center gap-2">
+                <span className="font-mono truncate flex-1"
+                  style={{ color: result?.ok === false ? 'var(--error)' : result?.ok ? 'var(--success)' : 'var(--ink-mid)' }}>
+                  {f.path}
+                </span>
+                {result?.ok && !isUndone && <CheckCircle2 size={11} style={{ color: 'var(--success)', flexShrink: 0 }} />}
+                {result?.ok === false && <span style={{ color: 'var(--error)', flexShrink: 0 }}>✗ {result.error}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Undo button — only shown after successful write */}
       {isDone && (
-        <div style={{ padding: '6px 12px', borderTop: '1px solid var(--s4)' }}>
+        <div className="px-3 pb-2">
           <button
             onClick={handleUndo}
-            style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--ink-low)', border: '1px solid var(--s4)', borderRadius: '6px', padding: '3px 8px', background: 'transparent', cursor: 'pointer' }}
+            className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-lg transition-all"
+            style={{ border: '1px solid var(--s4)', color: 'var(--ink-low)', background: 'transparent' }}
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = 'var(--warning)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--warning)'; }}
             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'var(--ink-low)'; (e.currentTarget as HTMLElement).style.borderColor = 'var(--s4)'; }}
           >
@@ -203,12 +321,110 @@ function WriteFilesBlock({
   );
 }
 
-// ── Malformed write-files payload — shown instead of silently exposing raw JSON as insertable code ──
+// ── Delete-files block ───────────────────────────────────────────────────────────
+type DeleteStatus = 'awaiting-permission' | 'deleting' | 'done' | 'error' | 'denied';
+
+function DeleteFilesBlock({
+  paths,
+  onFilesDeleted,
+  onRequestPermission,
+  lastUserPrompt,
+}: {
+  paths: string[];
+  onFilesDeleted?: (paths: string[]) => void;
+  onRequestPermission?: (
+    action: 'EDIT' | 'CREATE' | 'DELETE',
+    files: { path: string; content: string }[],
+    onProceed: () => void,
+    onDeny: () => void,
+  ) => void;
+  lastUserPrompt?: string;
+}) {
+  const [status, setStatus] = useState<DeleteStatus>('awaiting-permission');
+  const [results, setResults] = useState<{ path: string; ok: boolean; error?: string }[]>([]);
+
+  const handleApprove = async () => {
+    setStatus('deleting');
+    const res = await Promise.all(paths.map(async (p) => {
+      const r = await deleteFile(p);
+      return { path: p, ok: r.ok, error: r.error };
+    }));
+    setResults(res);
+    const allOk = res.every(r => r.ok);
+    setStatus(allOk ? 'done' : 'error');
+    if (allOk) onFilesDeleted?.(paths);
+  };
+
+  const handleDeny = () => setStatus('denied');
+
+  // Deletions are irreversible — always confirm, no heuristic bypass.
+  useEffect(() => {
+    if (!isElectron() || paths.length === 0) return;
+    if (needsPermissionForDelete(paths, lastUserPrompt ?? '') && onRequestPermission) {
+      // DeleteFilesBlock reuses the same {path, content} shape for the dialog's file list
+      onRequestPermission('DELETE', paths.map(p => ({ path: p, content: '' })), handleApprove, handleDeny);
+    } else {
+      handleApprove();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!isElectron()) return null;
+
+  const isBusy = status === 'deleting';
+
+  return (
+    <div className="rounded-lg my-2 overflow-hidden text-[12px]"
+      style={{ border: '1px solid var(--s3)', background: 'var(--s2)' }}>
+      <div className="flex items-center gap-2 px-3 py-2"
+        style={{ borderBottom: '1px solid var(--s3)', color: 'var(--ink-mid)' }}>
+        <Undo2 size={13} style={{ color: 'var(--error)', flexShrink: 0, transform: 'scaleX(-1)' }} />
+        <span className="font-medium" style={{ color: 'var(--ink-high)' }}>
+          {status === 'awaiting-permission' ? 'Permission required: delete files'
+          : status === 'deleting'           ? 'Deleting…'
+          : status === 'done'               ? 'Files deleted'
+          : status === 'error'              ? 'Some deletions failed'
+          : 'Cancelled'}
+        </span>
+        {isBusy && <Loader2 size={11} className="animate-spin ml-auto" style={{ color: 'var(--accent)' }} />}
+        {status === 'done' && <CheckCircle2 size={13} className="ml-auto" style={{ color: 'var(--success)' }} />}
+      </div>
+
+      {status === 'awaiting-permission' && (
+        <div className="px-3 py-2" style={{ color: 'var(--ink-mid)' }}>
+          <p className="mb-2">Respond to the permission request above to delete:</p>
+          <div className="space-y-1">
+            {paths.map(p => (
+              <div key={p} className="font-mono truncate" style={{ color: 'var(--error)' }}>{p}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(status === 'done' || status === 'error') && (
+        <div className="px-3 py-2 space-y-1">
+          {paths.map((p) => {
+            const result = results.find(r => r.path === p);
+            return (
+              <div key={p} className="flex items-center gap-2">
+                <span className="font-mono truncate flex-1"
+                  style={{ color: result?.ok === false ? 'var(--error)' : 'var(--ink-mid)' }}>{p}</span>
+                {result?.ok && <CheckCircle2 size={11} style={{ color: 'var(--success)', flexShrink: 0 }} />}
+                {result?.ok === false && <span style={{ color: 'var(--error)', flexShrink: 0 }}>✗ {result.error}</span>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Malformed write-files payload ──────────────────────────────────────────────
 function WriteFilesErrorBlock({ error }: { error: string }) {
   return (
-    <div className="flex items-start gap-2 text-[12px] rounded-lg px-3 py-2 my-2"
-      style={{ color: 'var(--warning)', background: 'color-mix(in srgb, var(--warning) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)' }}>
-      <AlertTriangle size={13} className="mt-0.5 flex-shrink-0" />
+    <div className="flex items-start gap-2 text-[13px] rounded-lg px-3 py-2 my-2"
+      style={{ color: 'var(--error)', background: 'color-mix(in srgb, var(--error) 10%, transparent)', border: '1px solid color-mix(in srgb, var(--error) 30%, transparent)' }}>
+      <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
       <span>{error}</span>
     </div>
   );
@@ -222,6 +438,7 @@ export function MessageBubble({
   onAddToProject,
   onOpenInProgramming,
   onFilesWritten,
+  onFilesDeleted,
   fileTree,
   lastUserPrompt,
   onRequestPermission,
@@ -296,20 +513,31 @@ export function MessageBubble({
           ) : (
             <div className="md-content">
               {bodyBlocks.map((block, i) => {
-if (block.type === 'write-files' && !message.streaming) {
-  return (
-    <WriteFilesBlock
-      key={i}
-      files={block.files!}
-      onFilesWritten={onFilesWritten}
-      fileTree={fileTree}
-      lastUserPrompt={lastUserPrompt}
-      onRequestPermission={onRequestPermission}
-    />
-  );
-}
+                if (block.type === 'write-files' && !message.streaming) {
+                  return (
+                    <WriteFilesBlock
+                      key={i}
+                      files={block.files ?? []}
+                      onFilesWritten={onFilesWritten}
+                      onRequestPermission={onRequestPermission}
+                      fileTree={fileTree}
+                      lastUserPrompt={lastUserPrompt}
+                    />
+                  );
+                }
+                if (block.type === 'delete-files' && !message.streaming) {
+                  return (
+                    <DeleteFilesBlock
+                      key={i}
+                      paths={block.paths ?? []}
+                      onFilesDeleted={onFilesDeleted}
+                      onRequestPermission={onRequestPermission}
+                      lastUserPrompt={lastUserPrompt}
+                    />
+                  );
+                }
                 if (block.type === 'write-files-error' && !message.streaming) {
-                  return <WriteFilesErrorBlock key={i} error={block.error ?? 'The AI attempted a file write that could not be completed.'} />;
+                  return <WriteFilesErrorBlock key={i} error={block.error!} />;
                 }
                 if (block.type === 'code') {
                   return (
