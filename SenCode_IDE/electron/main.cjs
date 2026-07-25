@@ -204,6 +204,22 @@ ipcMain.handle('backend:restart', async () => {
   return lastStatus;
 });
 
+
+// Sequential permission pipeline — Step 1: create directories only
+ipcMain.handle('fs:mkdir-dirs', (_event, dirs) => {
+  const results = [];
+  for (const dir of dirs) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      results.push({ path: dir, ok: true });
+    } catch (e) {
+      results.push({ path: dir, ok: false, error: e.message });
+    }
+  }
+  return results;
+});
+
+
 // ── IPC: hardware info ────────────────────────────────────────────────────────
 ipcMain.handle('hardware:get-info', () => cachedHardware ?? null);
 
