@@ -8,7 +8,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   isElectron: true,
-
+createDirs: (dirs) => ipcRenderer.invoke('fs:mkdir-dirs', dirs),
   // ── Backend lifecycle ─────────────────────────────────────────────────────
   getBackendStatus : () => ipcRenderer.invoke('backend:get-status'),
   restartBackend   : () => ipcRenderer.invoke('backend:restart'),
