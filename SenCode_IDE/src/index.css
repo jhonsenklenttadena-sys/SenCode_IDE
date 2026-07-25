@@ -1,0 +1,298 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Theme tokens ─────────────────────────────────────────────────────────────
+   Every color in the UI is a CSS variable. Swapping the class on <html>
+   changes the entire app uniformly — panels, chat, sidebar, topbar, everything.
+   ─────────────────────────────────────────────────────────────────────────── */
+
+/* Default / Midnight Purple (your chosen design) */
+:root,
+html.theme-midnight {
+  --s0: #0a0c10;
+  --s1: #0f0e1a;
+  --s2: #16122a;
+  --s3: #1e1c34;
+  --s4: #2e2860;
+  --ink-high: #e2d9f8;
+  --ink-mid:  #8878b8;
+  --ink-low:  #4a4070;
+  --primary:       #7a5af8;
+  --primary-hover: #6a4ae8;
+  --primary-dim:   #7a5af820;
+  --accent:        #a78bfa;
+  --accent-dim:    #a78bfa20;
+  --success:   #4ade80;
+  --warning:   #fbbf24;
+  --error:     #f87171;
+  --user-bg:       #16112a;
+  --user-border:   #2e2050;
+  --user-text:     #c0b0e0;
+  --user-label:    #5a4a8a;
+  --ai-bg:         #0f0e1a;
+  --ai-border:     #1e1c34;
+  --ai-header-bg:  #0c0b16;
+  --ai-header-border: #1a1830;
+  --ai-dot:        #7a5af8;
+  --ai-dot-glow:   #7a5af880;
+  --ai-name:       #6a4ae8;
+  --ai-text:       #c8c0e8;
+  --ai-time:       #2e2a48;
+  --code-bg:       #0d0a1e;
+  --code-border:   #2a2050;
+  --code-text:     #a78bfa;
+  --followup-border:  #2e2860;
+  --followup-text:    #8070c0;
+  --followup-hover-bg:     #1e1a38;
+  --followup-hover-border: #5a4af0;
+  --followup-hover-text:   #b8a8f8;
+  --divider: #1e1c34;
+  --scrollbar-thumb: #2e2860;
+}
+
+/* Ocean Blue */
+html.theme-ocean {
+  --s0: #070d14;
+  --s1: #0b1220;
+  --s2: #101c30;
+  --s3: #182540;
+  --s4: #1e3a6e;
+  --ink-high: #d0e8ff;
+  --ink-mid:  #6a9acc;
+  --ink-low:  #2a4a6a;
+  --primary:       #3b82f6;
+  --primary-hover: #2563eb;
+  --primary-dim:   #3b82f620;
+  --accent:        #60a5fa;
+  --accent-dim:    #60a5fa20;
+  --success:   #34d399;
+  --warning:   #fbbf24;
+  --error:     #f87171;
+  --user-bg:       #0c1a2e;
+  --user-border:   #1e3a60;
+  --user-text:     #a0c8f0;
+  --user-label:    #3a6a9a;
+  --ai-bg:         #0b1220;
+  --ai-border:     #182540;
+  --ai-header-bg:  #080f1a;
+  --ai-header-border: #122030;
+  --ai-dot:        #3b82f6;
+  --ai-dot-glow:   #3b82f680;
+  --ai-name:       #2563eb;
+  --ai-text:       #b8d8f8;
+  --ai-time:       #1e3050;
+  --code-bg:       #060e18;
+  --code-border:   #1a3050;
+  --code-text:     #60a5fa;
+  --followup-border:  #1e3a6e;
+  --followup-text:    #4a7ab8;
+  --followup-hover-bg:     #0e2040;
+  --followup-hover-border: #3b82f6;
+  --followup-hover-text:   #90c0f8;
+  --divider: #182540;
+  --scrollbar-thumb: #1e3a6e;
+}
+
+/* Forest Green */
+html.theme-forest {
+  --s0: #060c08;
+  --s1: #0a1210;
+  --s2: #0e1c18;
+  --s3: #162820;
+  --s4: #1e4030;
+  --ink-high: #c8f0d8;
+  --ink-mid:  #5a9a70;
+  --ink-low:  #2a5a38;
+  --primary:       #22c55e;
+  --primary-hover: #16a34a;
+  --primary-dim:   #22c55e20;
+  --accent:        #4ade80;
+  --accent-dim:    #4ade8020;
+  --success:   #4ade80;
+  --warning:   #fbbf24;
+  --error:     #f87171;
+  --user-bg:       #0c1e10;
+  --user-border:   #1e4a28;
+  --user-text:     #90d0a8;
+  --user-label:    #2a6a3a;
+  --ai-bg:         #0a1210;
+  --ai-border:     #162820;
+  --ai-header-bg:  #070e0a;
+  --ai-header-border: #102018;
+  --ai-dot:        #22c55e;
+  --ai-dot-glow:   #22c55e80;
+  --ai-name:       #16a34a;
+  --ai-text:       #a8e0bc;
+  --ai-time:       #1a3a22;
+  --code-bg:       #040a06;
+  --code-border:   #163020;
+  --code-text:     #4ade80;
+  --followup-border:  #1e4030;
+  --followup-text:    #3a7a50;
+  --followup-hover-bg:     #0e2818;
+  --followup-hover-border: #22c55e;
+  --followup-hover-text:   #7ac898;
+  --divider: #162820;
+  --scrollbar-thumb: #1e4030;
+}
+
+/* Ember / Dark Red-Orange */
+html.theme-ember {
+  --s0: #0e0805;
+  --s1: #170e08;
+  --s2: #221408;
+  --s3: #301c0a;
+  --s4: #5a2e0a;
+  --ink-high: #f8e0c0;
+  --ink-mid:  #b07040;
+  --ink-low:  #603818;
+  --primary:       #f97316;
+  --primary-hover: #ea6c0d;
+  --primary-dim:   #f9731620;
+  --accent:        #fb923c;
+  --accent-dim:    #fb923c20;
+  --success:   #4ade80;
+  --warning:   #fbbf24;
+  --error:     #f87171;
+  --user-bg:       #1e1008;
+  --user-border:   #4a2010;
+  --user-text:     #d0a070;
+  --user-label:    #6a3818;
+  --ai-bg:         #170e08;
+  --ai-border:     #301c0a;
+  --ai-header-bg:  #100a04;
+  --ai-header-border: #281408;
+  --ai-dot:        #f97316;
+  --ai-dot-glow:   #f9731680;
+  --ai-name:       #ea6c0d;
+  --ai-text:       #e8c898;
+  --ai-time:       #3a1e08;
+  --code-bg:       #0a0502;
+  --code-border:   #301808;
+  --code-text:     #fb923c;
+  --followup-border:  #5a2e0a;
+  --followup-text:    #8a4818;
+  --followup-hover-bg:     #281408;
+  --followup-hover-border: #f97316;
+  --followup-hover-text:   #f0a860;
+  --divider: #301c0a;
+  --scrollbar-thumb: #5a2e0a;
+}
+
+/* Arctic / Light theme */
+html.theme-arctic {
+  --s0: #f0f2f5;
+  --s1: #ffffff;
+  --s2: #e8ebf0;
+  --s3: #d0d5e0;
+  --s4: #a0aabb;
+  --ink-high: #1a2030;
+  --ink-mid:  #5a6880;
+  --ink-low:  #9aa8c0;
+  --primary:       #4a6cf7;
+  --primary-hover: #3a5ce0;
+  --primary-dim:   #4a6cf715;
+  --accent:        #7c3aed;
+  --accent-dim:    #7c3aed15;
+  --success:   #16a34a;
+  --warning:   #d97706;
+  --error:     #dc2626;
+  --user-bg:       #eef0ff;
+  --user-border:   #c8cef8;
+  --user-text:     #2a3878;
+  --user-label:    #6878c8;
+  --ai-bg:         #ffffff;
+  --ai-border:     #d8dce8;
+  --ai-header-bg:  #f4f6fa;
+  --ai-header-border: #dde0ea;
+  --ai-dot:        #4a6cf7;
+  --ai-dot-glow:   #4a6cf740;
+  --ai-name:       #3a5ce0;
+  --ai-text:       #283050;
+  --ai-time:       #9aa8c0;
+  --code-bg:       #f0f0ff;
+  --code-border:   #d0d0f0;
+  --code-text:     #4a3aaa;
+  --followup-border:  #c8cef8;
+  --followup-text:    #4a5a90;
+  --followup-hover-bg:     #eef0ff;
+  --followup-hover-border: #4a6cf7;
+  --followup-hover-text:   #2a3a88;
+  --divider: #d8dce8;
+  --scrollbar-thumb: #c0c8da;
+}
+
+/* ── Base styles ─────────────────────────────────────────────────────────── */
+:root { color-scheme: dark; }
+html.theme-arctic { color-scheme: light; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--s0);
+  color: var(--ink-high);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  filter: brightness(1.3);
+  background-clip: content-box;
+}
+
+/* ── Chat markdown ───────────────────────────────────────────────────────── */
+.md-content { @apply text-[13px] leading-relaxed; color: var(--ai-text); }
+.md-content p { @apply mb-3; }
+.md-content p:last-child { @apply mb-0; }
+.md-content h1 { @apply text-base font-semibold mb-3 mt-4; color: var(--ink-high); }
+.md-content h2 { @apply text-sm font-semibold mb-2 mt-4;  color: var(--ink-high); }
+.md-content h3 { @apply text-sm font-semibold mb-2 mt-3;  color: var(--ink-high); }
+.md-content ul { @apply list-disc pl-5 mb-3 space-y-1; }
+.md-content ol { @apply list-decimal pl-5 mb-3 space-y-1; }
+.md-content li { color: var(--ink-high); }
+.md-content a  { color: var(--primary); }
+.md-content a:hover { text-decoration: underline; }
+.md-content strong { font-weight: 600; color: var(--ink-high); }
+.md-content em { font-style: italic; }
+.md-content blockquote {
+  border-left: 2px solid var(--primary);
+  padding-left: 0.75rem;
+  color: var(--ink-mid);
+  font-style: italic;
+  margin: 0.75rem 0;
+}
+.md-content table { @apply w-full text-xs my-3 border-collapse; }
+.md-content th { background: var(--s2); padding: 4px 8px; text-align: left; font-weight: 600; border: 1px solid var(--s3); color: var(--ink-high); }
+.md-content td { padding: 4px 8px; border: 1px solid var(--s3); }
+.md-content hr { border-color: var(--s3); margin: 1rem 0; }
+.md-content code:not(pre code) {
+  background: var(--code-bg);
+  border: 1px solid var(--code-border);
+  color: var(--code-text);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.md-content pre { @apply mb-3; }
+
+/* ── Cursor helpers ──────────────────────────────────────────────────────── */
+.cursor-col-resize { cursor: col-resize; }
+.cursor-row-resize { cursor: row-resize; }
+
+/* ── Terminal ────────────────────────────────────────────────────────────── */
+.terminal-output { font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.5; }
+.monaco-placeholder { font-family: 'JetBrains Mono', monospace; }

@@ -1,0 +1,117 @@
+{
+  "name": "vite-react-typescript-starter",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.app.json",
+    "electron:dev": "concurrently -k -n VITE,ELECTRON -c blue,magenta \"vite\" \"wait-on tcp:3333 && cross-env ELECTRON_START_URL=http://localhost:3333 electron .\"",
+    "electron:preview": "npm run build && electron .",
+    "electron:build": "npm run build && electron-builder",
+    "electron:build:nosign": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false WIN_CSC_LINK= CSC_LINK= ELECTRON_BUILDER_ALLOW_UNRESOLVED_DEPENDENCIES=true electron-builder --win dir",
+    "deploy": "npm run build && node scripts/deploy-asar.cjs"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "6.18.6",
+    "@codemirror/commands": "6.8.1",
+    "@codemirror/lang-cpp": "6.0.2",
+    "@codemirror/lang-css": "6.3.1",
+    "@codemirror/lang-html": "6.4.9",
+    "@codemirror/lang-java": "6.0.1",
+    "@codemirror/lang-javascript": "6.2.3",
+    "@codemirror/lang-json": "6.0.1",
+    "@codemirror/lang-markdown": "6.3.2",
+    "@codemirror/lang-php": "6.0.1",
+    "@codemirror/lang-python": "6.1.7",
+    "@codemirror/lang-rust": "6.0.1",
+    "@codemirror/lang-sql": "6.8.0",
+    "@codemirror/lang-vue": "0.1.3",
+    "@codemirror/lang-wast": "6.0.2",
+    "@codemirror/lang-xml": "6.1.0",
+    "@codemirror/lang-yaml": "6.1.2",
+    "@codemirror/language": "6.11.1",
+    "@codemirror/legacy-modes": "6.5.1",
+    "@codemirror/lint": "^6.8.4",
+    "@codemirror/search": "6.5.10",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/theme-one-dark": "6.1.2",
+    "@codemirror/view": "^6.42.0",
+    "@lezer/highlight": "1.2.1",
+    "@supabase/supabase-js": "^2.57.4",
+    "@types/dompurify": "^3.0.5",
+    "dompurify": "^3.4.12",
+    "lucide-react": "^0.344.0",
+    "marked": "^18.0.6",
+    "node-llama-cpp": "^3.19.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "systeminformation": "^5.31.17"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.9.1",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.18",
+    "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "electron": "^32.2.0",
+    "electron-builder": "^25.1.8",
+    "eslint": "^9.9.1",
+    "eslint-plugin-react-hooks": "^5.1.0-rc.0",
+    "eslint-plugin-react-refresh": "^0.4.11",
+    "globals": "^15.9.0",
+    "postcss": "^8.4.35",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.5.3",
+    "typescript-eslint": "^8.3.0",
+    "vite": "^5.4.2",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.sencode.app",
+    "productName": "SenCode",
+    "icon": "build/icon.ico",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "node_modules/**/*",
+      "!node_modules/.cache/**/*",
+      "!node_modules/**/*.{md,markdown,txt,log}",
+      "!node_modules/**/test/**/*",
+      "!node_modules/**/tests/**/*",
+      "!node_modules/**/__tests__/**/*",
+      "!node_modules/**/docs/**/*",
+      "!node_modules/**/example/**/*",
+      "!node_modules/**/examples/**/*"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/node-llama-cpp/**/*",
+      "node_modules/@node-llama-cpp/**/*",
+      "node_modules/systeminformation/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": "dir",
+      "requestedExecutionLevel": "asInvoker",
+      "forceCodeSigning": false,
+      "sign": null,
+      "signAndEditExecutable": false,
+      "signDlls": false
+    },
+    "portable": {
+      "artifactName": "SenCode.exe"
+    }
+  },
+  "allowScripts": {
+    "node-llama-cpp@3.19.0": true
+  }
+}
